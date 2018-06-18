@@ -61,7 +61,7 @@ def main():
         scan(args.git_url, args)
 
 def scanOrg(org, args): 
-    g = Github("0a7c41a8e3af1e5bad87a51383659b1237627857")
+    g = Github(args.token)
     for repo in g.get_organization(org).get_repos():
         scan(repo.clone_url, args)
 
