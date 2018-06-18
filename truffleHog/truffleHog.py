@@ -69,6 +69,7 @@ def scanOrg(org, args):
 def scan(git_url, args):
     if args.token != "":
         git_url = git_url.replace("github.com", args.token + "@github.com")
+    print("Scanning -> " + git_url)
     do_entropy = str2bool(args.do_entropy)
     output = find_strings(git_url, args.since_commit, args.max_depth, args.output_json, args.do_regex, do_entropy, surpress_output=False)
     project_path = output["project_path"]
