@@ -17,6 +17,8 @@ import stat
 from git import Repo
 from git import NULL_TREE
 from truffleHogRegexes.regexChecks import regexes
+from github import Github
+from github import Organization
 
 
 def main():
@@ -27,12 +29,16 @@ def main():
     parser.add_argument("--entropy", dest="do_entropy", help="Enable entropy checks")
     parser.add_argument("--since_commit", dest="since_commit", help="Only scan from a given commit hash")
     parser.add_argument("--max_depth", dest="max_depth", help="The max commit depth to go back when searching for secrets")
+    parser.add_argument("--orgs", dest="orgs", help="Comma separated list of organizations to list repositories")
+    parser.add_argument("--token", dest="token", help="Access token to read private repos")
     parser.add_argument('git_url', type=str, help='URL for secret searching')
     parser.set_defaults(regex=False)
     parser.set_defaults(rules={})
     parser.set_defaults(max_depth=1000000)
     parser.set_defaults(since_commit=None)
     parser.set_defaults(entropy=True)
+    parser.set_defaults(orgs={})
+    parser.set_defaults(token="")
     args = parser.parse_args()
     rules = {}
     if args.rules:
@@ -47,8 +53,24 @@ def main():
             del regexes[regex]
         for regex in rules:
             regexes[regex] = rules[regex]
+    
+    if args.orgs != {}:
+        for org in args.orgs.split(","):
+            scanOrg(org, args)
+    else:
+        scan(args.git_url, args)
+
+def scanOrg(org, args): 
+    g = Github("0a7c41a8e3af1e5bad87a51383659b1237627857")
+    for repo in g.get_organization(org).get_repos():
+        scan(repo.clone_url, args)
+
+
+def scan(git_url, args):
+    if args.token != "":
+        git_url = git_url.replace("github.com", args.token + "@github.com")
     do_entropy = str2bool(args.do_entropy)
-    output = find_strings(args.git_url, args.since_commit, args.max_depth, args.output_json, args.do_regex, do_entropy, surpress_output=False)
+    output = find_strings(git_url, args.since_commit, args.max_depth, args.output_json, args.do_regex, do_entropy, surpress_output=False)
     project_path = output["project_path"]
     shutil.rmtree(project_path, onerror=del_rw)
     if output["foundIssues"]:
