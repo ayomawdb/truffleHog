@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -785,7 +784,7 @@ func (s *Source) cloneAndScanRepo(ctx context.Context, client *github.Client, re
 	if err != nil {
 		return duration, err
 	}
-	defer os.RemoveAll(path)
+	// defer os.RemoveAll(path)
 
 	// TODO: Can this be set once or does it need to be set on every iteration? Is |s.scanOptions| set every clone?
 	s.setScanOptions(s.conn.Base, s.conn.Head)

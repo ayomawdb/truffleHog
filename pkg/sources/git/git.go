@@ -25,7 +25,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/trufflesecurity/trufflehog/v3/pkg/cleantemp"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/common"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/context"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/gitparse"
@@ -382,17 +381,71 @@ type cloneParams struct {
 	clonePath string
 }
 
+// Define a permanent path for cloning repositories relative to the current working directory
+var permanentClonePath string
+
+func init() {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting current working directory: %v\n", err)
+		os.Exit(1)
+	}
+	permanentClonePath = filepath.Join(cwd, "clones")
+}
+
+// extractRepoInfo parses the gitURL to extract the username and repository name
+func extractRepoInfo(gitURL string) (string, string, error) {
+	parsedURL, err := url.Parse(gitURL)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Extract the path components
+	parts := strings.Split(strings.Trim(parsedURL.Path, "/"), "/")
+	if len(parts) < 2 {
+		return "", "", errors.New("invalid repository URL format")
+	}
+
+	username := parts[0]
+	repoName := parts[1]
+	// Remove the .git suffix if present
+	repoName = strings.TrimSuffix(repoName, ".git")
+
+	return username, repoName, nil
+}
+
 // CloneRepo orchestrates the cloning of a given Git repository, returning its local path
 // and a git.Repository object for further operations. The function sets up error handling
 // infrastructure, ensuring that any encountered errors trigger a cleanup of resources.
 // The core cloning logic is delegated to a nested function, which returns errors to the
 // outer function for centralized error handling and cleanup.
 func CloneRepo(ctx context.Context, userInfo *url.Userinfo, gitURL string, args ...string) (string, *git.Repository, error) {
-	clonePath, err := cleantemp.MkdirTemp()
+	// Extract the username and repository name from the gitURL
+	username, repoName, err := extractRepoInfo(gitURL)
 	if err != nil {
 		return "", nil, err
 	}
+	logger := ctx.Logger()
 
+	// Generate the clone path based on the username and repository name
+	clonePath := filepath.Join(permanentClonePath, username, repoName)
+
+	// Check if the repository already exists
+	if _, err := os.Stat(clonePath); err == nil {
+		// Repository exists, update it
+		repo, err := git.PlainOpen(clonePath)
+		if err != nil {
+			return "", nil, fmt.Errorf("could not open existing repo: %w", err)
+		}
+		logger.Info("updating " + permanentClonePath)
+		err = updateRepo(repo, clonePath)
+		if err != nil {
+			return "", nil, fmt.Errorf("could not update existing repo: %w", err)
+		}
+		return clonePath, repo, nil
+	}
+
+	logger.Info("cloning to " + permanentClonePath)
 	repo, err := executeClone(ctx, cloneParams{userInfo, gitURL, args, clonePath})
 	if err != nil {
 		// DO NOT FORGET TO CLEAN UP THE CLONE PATH HERE!!
@@ -402,6 +455,21 @@ func CloneRepo(ctx context.Context, userInfo *url.Userinfo, gitURL string, args 
 	}
 
 	return clonePath, repo, nil
+}
+
+// updateRepo pulls the latest changes for all branches in the existing repository
+func updateRepo(repo *git.Repository, clonePath string) error {
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("could not get worktree: %w", err)
+	}
+
+	err = worktree.Pull(&git.PullOptions{RemoteName: "origin"})
+	if err != nil && err != git.NoErrAlreadyUpToDate {
+		return fmt.Errorf("could not pull latest changes: %w", err)
+	}
+
+	return nil
 }
 
 // executeClone prepares the Git URL, constructs, and executes the git clone command using the provided
