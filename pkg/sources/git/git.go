@@ -400,10 +400,20 @@ func extractRepoInfo(gitURL string) (string, string, error) {
 		return "", "", err
 	}
 
-	// Extract the path components
+	// Check if the URL is a Gist URL
+	if strings.Contains(parsedURL.Host, "gist.github.com") {
+		// Extract the Gist ID
+		parts := strings.Split(strings.Trim(parsedURL.Path, "/"), "/")
+		if len(parts) < 1 {
+			return "", "", errors.New("invalid Gist URL format: " + gitURL)
+		}
+		return "gists", parts[0], nil
+	}
+
+	// Extract the path components for regular GitHub URLs
 	parts := strings.Split(strings.Trim(parsedURL.Path, "/"), "/")
 	if len(parts) < 2 {
-		return "", "", errors.New("invalid repository URL format")
+		return "", "", errors.New("invalid repository URL format: " + gitURL)
 	}
 
 	username := parts[0]
