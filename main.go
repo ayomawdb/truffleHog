@@ -13,14 +13,15 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/felixge/fgprof"
 	"github.com/go-logr/logr"
 	"github.com/jpillora/overseer"
 	"github.com/mattn/go-isatty"
+	"go.uber.org/automaxprocs/maxprocs"
 
+	"github.com/trufflesecurity/trufflehog/v3/pkg/analyzer"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/cleantemp"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/common"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/config"
@@ -98,6 +99,16 @@ var (
 	githubScanIssueComments = githubScan.Flag("issue-comments", "Include issue descriptions and comments in scan.").Bool()
 	githubScanPRComments    = githubScan.Flag("pr-comments", "Include pull request descriptions and comments in scan.").Bool()
 	githubScanGistComments  = githubScan.Flag("gist-comments", "Include gist comments in scan.").Bool()
+
+	// GitHub Cross Fork Object Reference Experimental Feature
+	githubExperimentalScan = cli.Command("github-experimental", "Run an experimental GitHub scan. Must specify at least one experimental sub-module to run: object-discovery.")
+	// GitHub Experimental SubModules
+	githubExperimentalObjectDiscovery = githubExperimentalScan.Flag("object-discovery", "Discover hidden data objects in GitHub repositories.").Bool()
+	// GitHub Experimental Options
+	githubExperimentalToken              = githubExperimentalScan.Flag("token", "GitHub token. Can be provided with environment variable GITHUB_TOKEN.").Envar("GITHUB_TOKEN").String()
+	githubExperimentalRepo               = githubExperimentalScan.Flag("repo", "GitHub repository to scan. Example: https://github.com/<user>/<repo>.git").Required().String()
+	githubExperimentalCollisionThreshold = githubExperimentalScan.Flag("collision-threshold", "Threshold for short-sha collisions in object-discovery submodule. Default is 1.").Default("1").Int()
+	githubExperimentalDeleteCache        = githubExperimentalScan.Flag("delete-cached-data", "Delete cached data after object-discovery secret scanning.").Bool()
 
 	gitlabScan = cli.Command("gitlab", "Find credentials in GitLab repositories.")
 	// TODO: Add more GitLab options
@@ -198,10 +209,34 @@ var (
 	jenkinsPassword              = jenkinsScan.Flag("password", "Jenkins password").Envar("JENKINS_PASSWORD").String()
 	jenkinsInsecureSkipVerifyTLS = jenkinsScan.Flag("insecure-skip-verify-tls", "Skip TLS verification").Envar("JENKINS_INSECURE_SKIP_VERIFY_TLS").Bool()
 
-	usingTUI = false
+	huggingfaceScan     = cli.Command("huggingface", "Find credentials in HuggingFace datasets, models and spaces.")
+	huggingfaceEndpoint = huggingfaceScan.Flag("endpoint", "HuggingFace endpoint.").Default("https://huggingface.co").String()
+	huggingfaceModels   = huggingfaceScan.Flag("model", "HuggingFace model to scan. You can repeat this flag. Example: 'username/model'").Strings()
+	huggingfaceSpaces   = huggingfaceScan.Flag("space", "HuggingFace space to scan. You can repeat this flag. Example: 'username/space'").Strings()
+	huggingfaceDatasets = huggingfaceScan.Flag("dataset", "HuggingFace dataset to scan. You can repeat this flag. Example: 'username/dataset'").Strings()
+	huggingfaceOrgs     = huggingfaceScan.Flag("org", `HuggingFace organization to scan. You can repeat this flag. Example: "trufflesecurity"`).Strings()
+	huggingfaceUsers    = huggingfaceScan.Flag("user", `HuggingFace user to scan. You can repeat this flag. Example: "trufflesecurity"`).Strings()
+	huggingfaceToken    = huggingfaceScan.Flag("token", "HuggingFace token. Can be provided with environment variable HUGGINGFACE_TOKEN.").Envar("HUGGINGFACE_TOKEN").String()
+
+	huggingfaceIncludeModels      = huggingfaceScan.Flag("include-models", "Models to include in scan. You can repeat this flag. Must use HuggingFace model full name. Example: 'username/model' (Only used with --user or --org)").Strings()
+	huggingfaceIncludeSpaces      = huggingfaceScan.Flag("include-spaces", "Spaces to include in scan. You can repeat this flag. Must use HuggingFace space full name. Example: 'username/space' (Only used with --user or --org)").Strings()
+	huggingfaceIncludeDatasets    = huggingfaceScan.Flag("include-datasets", "Datasets to include in scan. You can repeat this flag. Must use HuggingFace dataset full name. Example: 'username/dataset' (Only used with --user or --org)").Strings()
+	huggingfaceIgnoreModels       = huggingfaceScan.Flag("ignore-models", "Models to ignore in scan. You can repeat this flag. Must use HuggingFace model full name. Example: 'username/model' (Only used with --user or --org)").Strings()
+	huggingfaceIgnoreSpaces       = huggingfaceScan.Flag("ignore-spaces", "Spaces to ignore in scan. You can repeat this flag. Must use HuggingFace space full name. Example: 'username/space' (Only used with --user or --org)").Strings()
+	huggingfaceIgnoreDatasets     = huggingfaceScan.Flag("ignore-datasets", "Datasets to ignore in scan. You can repeat this flag. Must use HuggingFace dataset full name. Example: 'username/dataset' (Only used with --user or --org)").Strings()
+	huggingfaceSkipAllModels      = huggingfaceScan.Flag("skip-all-models", "Skip all model scans. (Only used with --user or --org)").Bool()
+	huggingfaceSkipAllSpaces      = huggingfaceScan.Flag("skip-all-spaces", "Skip all space scans. (Only used with --user or --org)").Bool()
+	huggingfaceSkipAllDatasets    = huggingfaceScan.Flag("skip-all-datasets", "Skip all dataset scans. (Only used with --user or --org)").Bool()
+	huggingfaceIncludeDiscussions = huggingfaceScan.Flag("include-discussions", "Include discussions in scan.").Bool()
+	huggingfaceIncludePrs         = huggingfaceScan.Flag("include-prs", "Include pull requests in scan.").Bool()
+
+	analyzeCmd = analyzer.Command(cli)
+	usingTUI   = false
 )
 
 func init() {
+	_, _ = maxprocs.Set()
+
 	for i, arg := range os.Args {
 		if strings.HasPrefix(arg, "--") {
 			split := strings.SplitN(arg, "=", 2)
@@ -264,7 +299,8 @@ func main() {
 	}
 
 	if !*noUpdate {
-		updateCfg.Fetcher = updater.Fetcher(usingTUI)
+		topLevelCmd, _, _ := strings.Cut(cmd, " ")
+		updateCfg.Fetcher = updater.Fetcher(topLevelCmd, usingTUI)
 	}
 	if version.BuildVersion == "dev" {
 		updateCfg.Fetcher = nil
@@ -277,6 +313,7 @@ func main() {
 }
 
 func run(state overseer.State) {
+
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 
@@ -301,9 +338,6 @@ func run(state overseer.State) {
 		} else {
 			logger.Info("cleaned temporary artifacts")
 		}
-
-		time.Sleep(time.Second * 10)
-		logger.Info("10 seconds elapsed. Forcing shutdown.")
 		os.Exit(0)
 	}()
 
@@ -321,6 +355,8 @@ func run(state overseer.State) {
 	}
 
 	if *profile {
+		runtime.SetBlockProfileRate(1)
+		runtime.SetMutexProfileFraction(-1)
 		go func() {
 			router := http.NewServeMux()
 			router.Handle("/debug/pprof/", http.DefaultServeMux)
@@ -379,8 +415,12 @@ func run(state overseer.State) {
 	}
 
 	engConf := engine.Config{
-		Concurrency:           *concurrency,
-		Detectors:             conf.Detectors,
+		Concurrency: *concurrency,
+		// The engine must always be configured with the list of
+		// default detectors, which can be further filtered by the
+		// user. The filters are applied by the engine and are only
+		// subtractive.
+		Detectors:             append(engine.DefaultDetectors(), conf.Detectors...),
 		Verify:                !*noVerification,
 		IncludeDetectors:      *includeDetectors,
 		ExcludeDetectors:      *excludeDetectors,
@@ -402,24 +442,30 @@ func run(state overseer.State) {
 		return
 	}
 
-	metrics, err := runSingleScan(ctx, cmd, engConf)
-	if err != nil {
-		logFatal(err, "error running scan")
-	}
+	topLevelSubCommand, _, _ := strings.Cut(cmd, " ")
+	switch topLevelSubCommand {
+	case analyzeCmd.FullCommand():
+		analyzer.Run(cmd)
+	default:
+		metrics, err := runSingleScan(ctx, cmd, engConf)
+		if err != nil {
+			logFatal(err, "error running scan")
+		}
 
-	// Print results.
-	logger.Info("finished scanning",
-		"chunks", metrics.ChunksScanned,
-		"bytes", metrics.BytesScanned,
-		"verified_secrets", metrics.VerifiedSecretsFound,
-		"unverified_secrets", metrics.UnverifiedSecretsFound,
-		"scan_duration", metrics.ScanDuration.String(),
-		"trufflehog_version", version.BuildVersion,
-	)
+		// Print results.
+		logger.Info("finished scanning",
+			"chunks", metrics.ChunksScanned,
+			"bytes", metrics.BytesScanned,
+			"verified_secrets", metrics.VerifiedSecretsFound,
+			"unverified_secrets", metrics.UnverifiedSecretsFound,
+			"scan_duration", metrics.ScanDuration.String(),
+			"trufflehog_version", version.BuildVersion,
+		)
 
-	if metrics.hasFoundResults && *fail {
-		logger.V(2).Info("exiting with code 183 because results were found")
-		os.Exit(183)
+		if metrics.hasFoundResults && *fail {
+			logger.V(2).Info("exiting with code 183 because results were found")
+			os.Exit(183)
+		}
 	}
 }
 
@@ -585,6 +631,17 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 		if err := eng.ScanGitHub(ctx, cfg); err != nil {
 			return scanMetrics, fmt.Errorf("failed to scan Github: %v", err)
 		}
+	case githubExperimentalScan.FullCommand():
+		cfg := sources.GitHubExperimentalConfig{
+			Token:              *githubExperimentalToken,
+			Repository:         *githubExperimentalRepo,
+			ObjectDiscovery:    *githubExperimentalObjectDiscovery,
+			CollisionThreshold: *githubExperimentalCollisionThreshold,
+			DeleteCachedData:   *githubExperimentalDeleteCache,
+		}
+		if err := eng.ScanGitHubExperimental(ctx, cfg); err != nil {
+			return scanMetrics, fmt.Errorf("failed to scan using Github Experimental: %v", err)
+		}
 	case gitlabScan.FullCommand():
 		filter, err := common.FilterFromFiles(*gitlabScanIncludePaths, *gitlabScanExcludePaths)
 		if err != nil {
@@ -737,6 +794,39 @@ func runSingleScan(ctx context.Context, cmd string, cfg engine.Config) (metrics,
 		}
 		if err := eng.ScanJenkins(ctx, cfg); err != nil {
 			return scanMetrics, fmt.Errorf("failed to scan Jenkins: %v", err)
+		}
+	case huggingfaceScan.FullCommand():
+		if *huggingfaceEndpoint != "" {
+			*huggingfaceEndpoint = strings.TrimRight(*huggingfaceEndpoint, "/")
+		}
+
+		if len(*huggingfaceModels) == 0 && len(*huggingfaceSpaces) == 0 && len(*huggingfaceDatasets) == 0 && len(*huggingfaceOrgs) == 0 && len(*huggingfaceUsers) == 0 {
+			return scanMetrics, fmt.Errorf("invalid config: you must specify at least one organization, user, model, space or dataset")
+		}
+
+		cfg := engine.HuggingfaceConfig{
+			Endpoint:           *huggingfaceEndpoint,
+			Models:             *huggingfaceModels,
+			Spaces:             *huggingfaceSpaces,
+			Datasets:           *huggingfaceDatasets,
+			Organizations:      *huggingfaceOrgs,
+			Users:              *huggingfaceUsers,
+			Token:              *huggingfaceToken,
+			IncludeModels:      *huggingfaceIncludeModels,
+			IncludeSpaces:      *huggingfaceIncludeSpaces,
+			IncludeDatasets:    *huggingfaceIncludeDatasets,
+			IgnoreModels:       *huggingfaceIgnoreModels,
+			IgnoreSpaces:       *huggingfaceIgnoreSpaces,
+			IgnoreDatasets:     *huggingfaceIgnoreDatasets,
+			SkipAllModels:      *huggingfaceSkipAllModels,
+			SkipAllSpaces:      *huggingfaceSkipAllSpaces,
+			SkipAllDatasets:    *huggingfaceSkipAllDatasets,
+			IncludeDiscussions: *huggingfaceIncludeDiscussions,
+			IncludePrs:         *huggingfaceIncludePrs,
+			Concurrency:        *concurrency,
+		}
+		if err := eng.ScanHuggingface(ctx, cfg); err != nil {
+			return scanMetrics, fmt.Errorf("failed to scan HuggingFace: %v", err)
 		}
 	default:
 		return scanMetrics, fmt.Errorf("invalid command: %s", cmd)

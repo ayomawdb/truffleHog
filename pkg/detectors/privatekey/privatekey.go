@@ -109,7 +109,7 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				user, err := verifyGitHubUser(parsedKey)
+				user, err := verifyGitHubUser(ctx, parsedKey)
 				if err != nil && !errors.Is(err, errPermissionDenied) {
 					verificationErrors.Add(err)
 				}
@@ -122,7 +122,7 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				user, err := verifyGitLabUser(parsedKey)
+				user, err := verifyGitLabUser(ctx, parsedKey)
 				if err != nil && !errors.Is(err, errPermissionDenied) {
 					verificationErrors.Add(err)
 				}
@@ -151,7 +151,9 @@ func (s Scanner) FromData(ctx context.Context, verify bool, data []byte) (result
 	return results, nil
 }
 
-func (s Scanner) IsFalsePositive(_ detectors.Result) bool { return false }
+func (s Scanner) IsFalsePositive(_ detectors.Result) (bool, string) {
+	return false, ""
+}
 
 type result struct {
 	CertificateURLs []string
