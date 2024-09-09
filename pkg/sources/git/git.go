@@ -451,6 +451,7 @@ func CloneRepo(ctx context.Context, userInfo *url.Userinfo, gitURL string, args 
 		err = updateRepo(repo, clonePath)
 		if err != nil {
 			return "", nil, fmt.Errorf("could not update existing repo: %w", err)
+			logger.Info("updating to " + permanentClonePath + "failed: " + err.Error())
 		}
 		return clonePath, repo, nil
 	}
@@ -474,9 +475,28 @@ func updateRepo(repo *git.Repository, clonePath string) error {
 		return fmt.Errorf("could not get worktree: %w", err)
 	}
 
-	err = worktree.Checkout(&git.CheckoutOptions{Branch: "main", Create: false, Force: true, Keep: false})
+	// Check if "main" exists, if not, fall back to "master"
+	mainRef := plumbing.NewBranchReferenceName("main")
+	masterRef := plumbing.NewBranchReferenceName("master")
+
+	// Try "main" first, if it doesn't exist, fall back to "master"
+	var branchName plumbing.ReferenceName
+	if _, err := repo.Reference(mainRef, true); err == nil {
+		branchName = mainRef
+	} else if _, err := repo.Reference(masterRef, true); err == nil {
+		branchName = masterRef
+	} else {
+		return fmt.Errorf("could not find 'main' or 'master' branch")
+	}
+
+	err = worktree.Checkout(&git.CheckoutOptions{
+		Branch: branchName,
+		Create: false,
+		Force:  true,
+		Keep:   false,
+	})
 	if err != nil {
-		return fmt.Errorf("could not checkout main: %w", err)
+		return fmt.Errorf("could not checkout %s: %w", branchName.Short(), err)
 	}
 
 	status, err := worktree.Status()
