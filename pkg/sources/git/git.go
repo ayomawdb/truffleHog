@@ -474,6 +474,24 @@ func updateRepo(repo *git.Repository, clonePath string) error {
 		return fmt.Errorf("could not get worktree: %w", err)
 	}
 
+	err = worktree.Checkout(&git.CheckoutOptions{Branch: "main", Create: false, Force: true, Keep: false})
+	if err != nil {
+		return fmt.Errorf("could not checkout main: %w", err)
+	}
+
+	status, err := worktree.Status()
+	if err != nil {
+		return fmt.Errorf("could not get status: %w", err)
+	}
+
+	if !status.IsClean() {
+		ref, err := repo.Head()
+		if err != nil {
+			return fmt.Errorf("could not get head: %w", err)
+		}
+		worktree.Reset(&git.ResetOptions{Commit: ref.Hash(), Mode: git.HardReset})
+	}
+
 	err = worktree.Pull(&git.PullOptions{RemoteName: "origin"})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
 		return fmt.Errorf("could not pull latest changes: %w", err)
