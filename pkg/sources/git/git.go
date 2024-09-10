@@ -447,10 +447,10 @@ func CloneRepo(ctx context.Context, userInfo *url.Userinfo, gitURL string, args 
 		if err != nil {
 			return "", nil, fmt.Errorf("could not open existing repo: %w", err)
 		}
-		logger.Info("updating " + permanentClonePath)
+		logger.Info("updating")
 		err = updateRepo(repo, clonePath)
 		if err != nil {
-			logger.Info("updating to " + permanentClonePath + "failed: " + err.Error())
+			logger.Info("updating failed: " + err.Error())
 			return "", nil, fmt.Errorf("could not update existing repo: %w", err)
 		}
 		return clonePath, repo, nil
@@ -477,7 +477,11 @@ func updateRepo(repo *git.Repository, clonePath string) error {
 
 	// Get the currently checked-out branch (default branch)
 	headRef, err := repo.Head()
-	if err != nil {
+	if err == plumbing.ErrReferenceNotFound {
+		// Repository is empty, so skip updating
+		logger.Info("repository is empty, skipping update")
+		return nil
+	} else if err != nil {
 		return fmt.Errorf("could not get head reference: %w", err)
 	}
 
