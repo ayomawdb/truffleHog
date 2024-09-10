@@ -450,8 +450,8 @@ func CloneRepo(ctx context.Context, userInfo *url.Userinfo, gitURL string, args 
 		logger.Info("updating " + permanentClonePath)
 		err = updateRepo(repo, clonePath)
 		if err != nil {
-			return "", nil, fmt.Errorf("could not update existing repo: %w", err)
 			logger.Info("updating to " + permanentClonePath + "failed: " + err.Error())
+			return "", nil, fmt.Errorf("could not update existing repo: %w", err)
 		}
 		return clonePath, repo, nil
 	}
