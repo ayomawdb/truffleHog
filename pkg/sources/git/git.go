@@ -475,28 +475,21 @@ func updateRepo(repo *git.Repository, clonePath string) error {
 		return fmt.Errorf("could not get worktree: %w", err)
 	}
 
-	// Check if "main" exists, if not, fall back to "master"
-	mainRef := plumbing.NewBranchReferenceName("main")
-	masterRef := plumbing.NewBranchReferenceName("master")
-
-	// Try "main" first, if it doesn't exist, fall back to "master"
-	var branchName plumbing.ReferenceName
-	if _, err := repo.Reference(mainRef, true); err == nil {
-		branchName = mainRef
-	} else if _, err := repo.Reference(masterRef, true); err == nil {
-		branchName = masterRef
-	} else {
-		return fmt.Errorf("could not find 'main' or 'master' branch")
+	// Get the currently checked-out branch (default branch)
+	headRef, err := repo.Head()
+	if err != nil {
+		return fmt.Errorf("could not get head reference: %w", err)
 	}
 
+	// Ensure we are on the branch pointed to by HEAD
 	err = worktree.Checkout(&git.CheckoutOptions{
-		Branch: branchName,
+		Branch: headRef.Name(),
 		Create: false,
 		Force:  true,
 		Keep:   false,
 	})
 	if err != nil {
-		return fmt.Errorf("could not checkout %s: %w", branchName.Short(), err)
+		return fmt.Errorf("could not checkout %s: %w", headRef.Name().Short(), err)
 	}
 
 	status, err := worktree.Status()
